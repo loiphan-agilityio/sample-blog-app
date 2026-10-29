@@ -313,7 +313,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter web exec playwright install --with-deps chromium
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         with:
           path: apps/web/allure-history.jsonl
           key: allure-history-mock-${{ github.run_id }}
@@ -328,7 +328,7 @@ jobs:
       - name: Allure report
         if: ${{ !cancelled() }}
         run: pnpm --filter web exec allure generate
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: ${{ !cancelled() }}
         with:
           path: apps/web/allure-history.jsonl
