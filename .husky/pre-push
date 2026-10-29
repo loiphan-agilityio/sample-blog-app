@@ -1,0 +1,19 @@
+# Refuses a push to a protected branch: they change only through a merged pull request, which runs
+# CI first (main deploys to production, see .github/workflows/ci.yml). Git passes one line per ref:
+# <local ref> <local sha> <remote ref> <remote sha>. PROTECTED_BRANCHES (space-separated) replaces
+# the list for one push; `git push --no-verify` skips every hook, so branch protection on the host
+# is still the real guard.
+protected="${PROTECTED_BRANCHES:-main master dev develop stag staging prod production}"
+status=0
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  branch="${remote_ref#refs/heads/}"
+  for name in $protected; do
+    if [ "$branch" = "$name" ]; then
+      echo "pre-push: '$branch' is protected; push a branch and open a pull request into it." >&2
+      status=1
+    fi
+  done
+done
+
+exit "$status"

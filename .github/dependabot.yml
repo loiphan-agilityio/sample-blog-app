@@ -1,0 +1,29 @@
+# Weekly update pull requests, grouped so a week brings at most one per ecosystem, plus security
+# updates as soon as an advisory lands (enable "Dependabot security updates" in the repository's
+# settings). CI runs every gate on each pull request before it can merge.
+version: 2
+updates:
+  # pnpm workspace: Dependabot reads pnpm-lock.yaml and updates the catalog in pnpm-workspace.yaml.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7: web-dev's guidelines pin 6. Drop this once they move to 7.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore(deps)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci

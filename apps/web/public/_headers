@@ -1,0 +1,25 @@
+# Cloudflare Pages headers for apps/web. Vite copies public/ into dist/ (and Storybook into
+# storybook-static/), and CI (.github/workflows/ci.yml) deploys that folder with
+# `wrangler pages deploy`, which applies the rules below.
+#
+# Single-page app: Pages serves index.html for a path that is not a file, as long as there is no
+# top-level 404.html, so deep links and reloads reach React Router. A file under assets/ that is
+# gone (a tab still open on the previous release asks for an old chunk) gets assets/404.html with
+# a 404 instead (Pages serves the nearest 404.html): HTML served for a script fails the import with
+# a MIME error, and the immutable header below would cache it for a year. src/main.tsx reloads such
+# a tab once. Pages sends that 404 with `Cache-Control: no-store`, so a rollback to a release that
+# has the file serves it again at once.
+
+# Security headers for every response. The Storybook deploy gets this file too, so they suit both
+# sites: SAMEORIGIN, not DENY, since Storybook frames its own iframe.html. The app's
+# Content-Security-Policy is a <meta> tag in its built index.html (vite.config.ts), which leaves
+# Storybook's inline scripts alone.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+
+# Vite hashes every file in assets/, so a cached copy is never stale.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

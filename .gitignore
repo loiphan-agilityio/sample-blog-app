@@ -1,0 +1,19 @@
+node_modules/
+dist/
+dist-e2e/
+coverage/
+storybook-static/
+allure-report/
+allure-history.jsonl
+test-results/
+blob-report/
+*storybook.log
+*.tsbuildinfo
+.vitest/
+.turbo/
+.env.local
+.env.*.local
+# Written by `msw init` (postinstall) from the installed msw, so it always matches its version.
+**/public/mockServiceWorker.js
+check-report.json
+lighthouse/

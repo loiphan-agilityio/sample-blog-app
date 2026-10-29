@@ -1,0 +1,38 @@
+# pnpm settings for this workspace (pnpm 11 reads them from this file).
+packages:
+  - 'apps/*'
+  - 'packages/*'
+# One version for every dependency declared by 2+ workspace packages; declare these as `catalog:`
+# in every package.json. React and sonner must exist exactly once: sonner's toast store is
+# module-level, so toast() called in an app and <Toaster> from @repo/ui must share one instance.
+catalog:
+  '@types/node': ^26.6.5
+  '@types/react': ^19.3.0
+  '@types/react-dom': ^19.3.0
+  lucide-react: ^1.61.0
+  prettier: ^3.9.10
+  react: ^19.3.1
+  react-dom: ^19.3.1
+  shadcn: ^4.22.1
+  sonner: ^2.0.8
+  tailwindcss: ^4.3.3
+  typescript: ~6.0.3
+# Storybook's builder needs esbuild's install script (pnpm 11 blocks unreviewed build scripts).
+allowBuilds:
+  esbuild: true
+auditConfig:
+  ignoreGhsas:
+    # braces <=3.0.3: stack exhaustion on deeply nested glob patterns. Reached only through the
+    # shadcn CLI (fast-glob > micromatch), which runs at dev time on the project's own patterns;
+    # nothing of it ships to the browser. No patched release exists yet (3.0.3 is the latest).
+    # Drop this entry once one does.
+    - GHSA-vfj7-8cjw-p6xm
+# Patched transitive versions, until the packages that pull them in require them. Drop an entry
+# once `pnpm why <name>` shows the patched version without it.
+overrides:
+  # fast-uri <3.1.9: URI scheme spoofing and host confusion (GHSA-333x-w4r6-6crp and related),
+  # through @hookform/resolvers > ajv; `pnpm update --depth Infinity` kept 3.1.8.
+  fast-uri: ^3.1.9
+  # No ESLint: Oxlint is the only linter. eslint-plugin-storybook declares eslint as a peer, but
+  # Oxlint runs it without ESLint, so nothing installs it.
+  eslint: '-'

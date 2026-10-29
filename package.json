@@ -1,0 +1,46 @@
+{
+  "name": "sample-blog-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev --filter=web",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint lint:root",
+    "lint:fix": "turbo run lint:fix && oxlint --type-aware --fix --ignore-pattern \"apps/**\" --ignore-pattern \"packages/**\" && prettier --write . \"!apps/**\" \"!packages/**\"",
+    "lint:root": "oxlint --type-aware --deny-warnings --ignore-pattern \"apps/**\" --ignore-pattern \"packages/**\" && prettier --check . \"!apps/**\" \"!packages/**\"",
+    "test": "turbo run test",
+    "test:watch": "pnpm --filter web test:watch",
+    "build-storybook": "turbo run build-storybook",
+    "test:e2e": "turbo run test:e2e",
+    "test:e2e:install": "pnpm --filter web test:e2e:install",
+    "check": "turbo run lint lint:root typecheck test && turbo run build build-storybook test:e2e",
+    "check:report": "node tools/check-report.mjs",
+    "lighthouse": "node tools/lighthouse.mjs",
+    "test:tools": "node --test \"tools/test/*.test.mjs\"",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@oxlint/plugins": "1.89.0",
+    "@types/node": "catalog:",
+    "eslint-plugin-storybook": "^10.6.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "prettier": "catalog:",
+    "turbo": "^2.11.10"
+  },
+  "commitlint": {
+    "extends": [
+      "@commitlint/config-conventional"
+    ]
+  }
+}

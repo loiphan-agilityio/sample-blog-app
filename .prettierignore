@@ -1,0 +1,17 @@
+pnpm-lock.yaml
+**/dist
+**/dist-e2e
+**/coverage
+**/storybook-static
+**/allure-report
+**/test-results
+**/blob-report
+**/.vitest
+**/.turbo
+**/public/mockServiceWorker.js
+packages/ui/src/components
+.claude
+# Markdown is prose for people and Claude; table padding would only add diff noise.
+*.md
+# Vendored anti-slop rules keep upstream formatting (tools/oxlint/anti-slop/UPSTREAM.md).
+tools/oxlint/anti-slop

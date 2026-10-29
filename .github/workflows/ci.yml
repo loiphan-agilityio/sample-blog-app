@@ -1,0 +1,366 @@
+# CI/CD for this monorepo on GitHub Actions. Every command runs from the root through turbo; the
+# deployed app is apps/web.
+#
+# - check: lint, typecheck, unit tests with coverage, build and Storybook build (and, in the
+#   boilerplate itself, the project generator's tests). Its production build is what every deploy
+#   publishes: a landing page has no mocks.
+# - deploy-draft: once check passes, that app and the Storybook build go to Cloudflare Pages as a
+#   preview: `pr-<number>.<project>.pages.dev` on a pull request, `main-draft` on a push to main.
+# - lighthouse: Lighthouse (mobile) on that deploy URL; accessibility under 100 or SEO under 95
+#   fails it, performance and best practices only warn (tools/lighthouse.mjs).
+# - deploy-production (push to main only): once lighthouse passes, the same files go live.
+# - e2e (push to main only): the one E2E run. Once production is live, the Playwright tests run
+#   against its URL: it checks what Pages serves (apps/web/public/_headers). It publishes an
+#   Allure 3 report on Cloudflare Pages (CLOUDFLARE_PAGES_PROJECT), or uploads it as an artifact
+#   when it cannot go there (a single index.html: download, unzip, open). It runs after the
+#   release, so a failure does not stop it: fix forward.
+#
+# Every deploy goes to Cloudflare Pages and needs the CLOUDFLARE_API_TOKEN secret (permission:
+# Account > Cloudflare Pages > Edit) and the CLOUDFLARE_ACCOUNT_ID variable (Settings > Secrets and
+# variables > Actions). Each site is a Pages project of its own, created once with
+# `npx wrangler pages project create <name> --production-branch main` and named by a variable:
+#
+# - CLOUDFLARE_PAGES_APP_PROJECT: the app. Without it the deploy jobs are skipped, and so are
+#   lighthouse and e2e, which follow them. Pull requests from forks and Dependabot's get no Actions
+#   secrets: only their checks run, and main deploys after the merge.
+# - CLOUDFLARE_PAGES_STORYBOOK_PROJECT (optional): Storybook, deployed alongside the app.
+# - CLOUDFLARE_PAGES_PROJECT: the Allure report. Without it it is an artifact instead.
+#   CLOUDFLARE_PAGES_UT_PROJECT does the same for the check job's coverage report.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer push to a pull request cancels its run; runs on main finish, so a deploy is never cut.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Adds pipefail, so a failing command before a pipe fails the step.
+    shell: bash
+
+env:
+  WRANGLER: wrangler@4.149.0
+
+jobs:
+  check:
+    name: 'Checks: lint, typecheck, unit, build'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm's version comes from packageManager in package.json.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # `pnpm check` minus test:e2e, which runs in its own job after the production deploy.
+      # tools/check-report.mjs runs every gate even after one fails and writes the checklist (pass
+      # rates, coverage) to the run's summary page.
+      - run: pnpm check:report --skip e2e
+      # The build every deploy publishes, and the e2e job tests once it is live.
+      - uses: actions/upload-artifact@v7
+        if: ${{ vars.CLOUDFLARE_PAGES_APP_PROJECT != '' }}
+        with:
+          name: app
+          path: apps/web/dist/
+          retention-days: 7
+      # What check:report and the lighthouse job conclude from their tools' output.
+      - name: Test the repo's tools
+        run: pnpm test:tools
+      # The generator exists only in the boilerplate: a project created from it has no create/.
+      - name: Test the project generator
+        if: ${{ hashFiles('create/index.test.js') != '' }}
+        run: node --test create/index.test.js
+      # The deploy jobs publish this Storybook build instead of building it again.
+      - uses: actions/upload-artifact@v7
+        if: ${{ vars.CLOUDFLARE_PAGES_STORYBOOK_PROJECT != '' }}
+        with:
+          name: storybook
+          path: apps/web/storybook-static/
+          retention-days: 7
+      # Publishes the unit tests' coverage report (Vitest's HTML) on a Cloudflare Pages project of
+      # its own, so its main deploy does not replace the Allure report's: pr-<number>.<project>
+      # .pages.dev on a pull request, <project>.pages.dev for main. Vitest writes no report when a
+      # test fails.
+      - name: Deploy the coverage report
+        id: coverage
+        if: >-
+          !cancelled() && vars.CLOUDFLARE_PAGES_UT_PROJECT != '' &&
+          hashFiles('apps/web/coverage/index.html') != '' &&
+          github.actor != 'dependabot[bot]' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ vars.CLOUDFLARE_PAGES_UT_PROJECT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler.ndjson
+        run: |
+          branch="${PR_NUMBER:+pr-$PR_NUMBER}"
+          branch="${branch:-$GITHUB_REF_NAME}"
+          printf '/*\n  X-Robots-Tag: noindex\n' > apps/web/coverage/_headers
+          npx -y "$WRANGLER" pages deploy apps/web/coverage --project-name "$PROJECT" \
+            --branch "$branch" --commit-hash "$SHA"
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* ]]
+          echo "Coverage report: $url" >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success \
+            -f context='Unit coverage report' -f target_url="$url" \
+            -f description='Unit test coverage'
+      # An artifact only when the report did not reach Cloudflare Pages.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.coverage.outcome != 'success' }}
+        with:
+          name: coverage
+          path: apps/web/coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deploy-draft:
+    name: 'Deploy: preview'
+    needs: check
+    if: >-
+      vars.CLOUDFLARE_PAGES_APP_PROJECT != '' &&
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      url: ${{ steps.app.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      APP_PROJECT: ${{ vars.CLOUDFLARE_PAGES_APP_PROJECT }}
+      STORYBOOK_PROJECT: ${{ vars.CLOUDFLARE_PAGES_STORYBOOK_PROJECT }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # On a pull request github.sha is the merge commit; the checks list shows the head commit.
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: app
+          path: apps/web/dist/
+      - uses: actions/download-artifact@v8
+        if: ${{ env.STORYBOOK_PROJECT != '' }}
+        with:
+          name: storybook
+          path: apps/web/storybook-static/
+      # A preview must stay out of search results: this job adds the header to the build's own
+      # _headers, and only its copy of the build gets it (production downloads the artifact
+      # again, without it). It goes into the existing /* block: Pages keeps one rule per path,
+      # so a second /* block would replace the first and drop its security headers.
+      - name: Keep the previews out of search engines
+        run: |
+          for dir in apps/web/dist apps/web/storybook-static; do
+            if [[ ! -d "$dir" ]]; then continue; fi
+            if grep -qx '/\*' "$dir/_headers" 2>/dev/null; then
+              sed -i 's|^/\*$|&\n  X-Robots-Tag: noindex|' "$dir/_headers"
+            else
+              printf '\n/*\n  X-Robots-Tag: noindex\n' >> "$dir/_headers"
+            fi
+          done
+      # Any branch but the project's production branch (main) is a preview: pr-<number> on a pull
+      # request, main-draft on a push to main, until deploy-production publishes it.
+      - name: Deploy the app (preview)
+        id: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-app.ndjson
+        run: |
+          branch="${PR_NUMBER:+pr-$PR_NUMBER}"
+          branch="${branch:-$GITHUB_REF_NAME-draft}"
+          npx -y "$WRANGLER" pages deploy apps/web/dist --project-name "$APP_PROJECT" \
+            --branch "$branch" --commit-hash "$SHA"
+          # The tests get this deploy's own URL, which a later push cannot move; the commit status
+          # gets the branch alias, which stays the same from run to run.
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          alias="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* && "$alias" == https://* ]]
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "App: $alias" >> "$GITHUB_STEP_SUMMARY"
+          # A commit status whose Details link in the checks list opens the deploy.
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success \
+            -f context='Preview - Webapp Deployment' -f target_url="$alias" \
+            -f description='Preview deploy'
+      - name: Deploy Storybook (preview)
+        if: ${{ env.STORYBOOK_PROJECT != '' }}
+        env:
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-storybook.ndjson
+        run: |
+          branch="${PR_NUMBER:+pr-$PR_NUMBER}"
+          branch="${branch:-$GITHUB_REF_NAME-draft}"
+          npx -y "$WRANGLER" pages deploy apps/web/storybook-static \
+            --project-name "$STORYBOOK_PROJECT" --branch "$branch" --commit-hash "$SHA"
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* ]]
+          echo "Storybook: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  lighthouse:
+    name: 'Lighthouse: deployed preview'
+    needs: deploy-draft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The script needs Node only: Lighthouse comes through npx, Chrome is on the runner.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node tools/lighthouse.mjs "$URL"
+        env:
+          URL: ${{ needs.deploy-draft.outputs.url }}
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: lighthouse
+          path: lighthouse/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deploy-production:
+    name: 'Deploy: production'
+    needs: lighthouse
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Approvals or branch rules for production can be set on this environment in the settings.
+    environment: production
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      url: ${{ steps.app.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      APP_PROJECT: ${{ vars.CLOUDFLARE_PAGES_APP_PROJECT }}
+      STORYBOOK_PROJECT: ${{ vars.CLOUDFLARE_PAGES_STORYBOOK_PROJECT }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: app
+          path: apps/web/dist/
+      - uses: actions/download-artifact@v8
+        if: ${{ env.STORYBOOK_PROJECT != '' }}
+        with:
+          name: storybook
+          path: apps/web/storybook-static/
+      # A deploy to the production branch (main) goes live. Pages uploads only the files the
+      # preview did not already, so this is quick.
+      - name: Publish the app
+        id: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-app.ndjson
+        run: |
+          npx -y "$WRANGLER" pages deploy apps/web/dist --project-name "$APP_PROJECT" \
+            --branch main --commit-hash "$GITHUB_SHA"
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* ]]
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "App: $url" >> "$GITHUB_STEP_SUMMARY"
+          # A commit status whose Details link in the checks list opens the live site.
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=success \
+            -f context='Prod - Webapp Deployment' -f target_url="$url" \
+            -f description='Live site'
+      - name: Publish Storybook
+        if: ${{ env.STORYBOOK_PROJECT != '' }}
+        env:
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-storybook.ndjson
+        run: |
+          npx -y "$WRANGLER" pages deploy apps/web/storybook-static \
+            --project-name "$STORYBOOK_PROJECT" --branch main --commit-hash "$GITHUB_SHA"
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* ]]
+          echo "Storybook: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    name: 'E2E: production'
+    needs: deploy-production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - uses: actions/cache/restore@v5
+        with:
+          path: apps/web/allure-history.jsonl
+          key: allure-history-mock-${{ github.run_id }}
+          restore-keys: allure-history-mock-
+      # With E2E_BASE_URL set, Playwright starts no server and tests the live site itself; the e2e
+      # pass rate goes to the run's summary page.
+      - run: pnpm check:report --only e2e
+        env:
+          E2E_BASE_URL: ${{ needs.deploy-production.outputs.url }}
+      # Allure 3 report (apps/web/allurerc.ts), on a pass or a failure. Its history (trends, flaky
+      # tests) lives in the Actions cache: a new entry per run.
+      - name: Allure report
+        if: ${{ !cancelled() }}
+        run: pnpm --filter web exec allure generate
+      - uses: actions/cache/save@v5
+        if: ${{ !cancelled() }}
+        with:
+          path: apps/web/allure-history.jsonl
+          key: allure-history-mock-${{ github.run_id }}-${{ github.run_attempt }}
+      # Publishes the report on Cloudflare Pages (free: unlimited static requests and bandwidth), at
+      # <project>.pages.dev.
+      - name: Deploy the Allure report
+        id: report
+        if: ${{ !cancelled() && vars.CLOUDFLARE_PAGES_PROJECT != '' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          # Wrangler writes its result here as ndjson, the deploy's URLs included.
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler.ndjson
+        run: |
+          # A report must stay out of search results.
+          printf '/*\n  X-Robots-Tag: noindex\n' > apps/web/allure-report/_headers
+          npx -y "$WRANGLER" pages deploy apps/web/allure-report --project-name "$PROJECT" \
+            --branch "$GITHUB_REF_NAME" --commit-hash "$GITHUB_SHA"
+          url="$(jq -r 'select(.type == "pages-deploy-detailed") | .alias // .url' \
+            "$WRANGLER_OUTPUT_FILE_PATH")"
+          [[ "$url" == https://* ]]
+          # The link is in the run's summary page and in an annotation at the top of the run.
+          echo "Allure report: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Allure report::$url"
+      # An artifact only when the report did not reach Cloudflare Pages (no
+      # CLOUDFLARE_PAGES_PROJECT, or a failed deploy).
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.report.outcome != 'success' }}
+        with:
+          name: allure-report
+          path: apps/web/allure-report/
+          if-no-files-found: ignore
+          retention-days: 14

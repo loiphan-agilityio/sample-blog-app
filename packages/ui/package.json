@@ -1,0 +1,42 @@
+{
+  "name": "@repo/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./globals.css": "./src/styles/globals.css",
+    "./components/*": "./src/components/*.tsx",
+    "./lib/*": "./src/lib/*.ts",
+    "./hooks/*": "./src/hooks/*.ts"
+  },
+  "scripts": {
+    "lint": "oxlint -c ../../oxlint.config.ts --type-aware --deny-warnings . && prettier --check .",
+    "lint:fix": "oxlint -c ../../oxlint.config.ts --type-aware --fix . && prettier --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "class-variance-authority": "^0.7.1",
+    "cn": "^0.5.0",
+    "lucide-react": "catalog:",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.8.1",
+    "sonner": "catalog:",
+    "tailwindcss": "catalog:",
+    "tw-animate-css": "^1.4.0"
+  },
+  "peerDependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "prettier": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "shadcn": "catalog:",
+    "typescript": "catalog:"
+  }
+}

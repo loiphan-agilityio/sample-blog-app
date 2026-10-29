@@ -1,0 +1,13 @@
+dist
+dist-e2e
+coverage
+storybook-static
+allure-report
+test-results
+blob-report
+.vitest
+.turbo
+public/mockServiceWorker.js
+.claude
+# Markdown is prose for people and Claude; table padding would only add diff noise.
+*.md
