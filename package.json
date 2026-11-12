@@ -28,13 +28,13 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
-    "@oxlint/plugins": "1.89.0",
+    "@oxlint/plugins": "1.92.0",
     "@types/node": "catalog:",
-    "eslint-plugin-storybook": "^10.6.3",
+    "eslint-plugin-storybook": "^10.6.6",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
-    "oxlint": "1.89.0",
-    "oxlint-tsgolint": "7.0.2004",
+    "oxlint": "1.92.0",
+    "oxlint-tsgolint": "7.0.2006",
     "prettier": "catalog:",
     "turbo": "^2.11.10"
   },
